@@ -94,6 +94,9 @@ var stateFunction   = idle
 var action          = idle
 var actionTimer     = 0
 var actionTimeout   = 1000
+var opTimeout1      = [300,300,300] // down, left, right
+var opTimeout2      = [40,40,40] // down, left, right
+var opTimer         = [0,0,0] // down, left, right
 var frames          = 0
 app = new App({
 	width           : 1280,
@@ -107,11 +110,26 @@ app = new App({
 
 var playfield
 var operationQueue
+var minoSeq
 var nextMino
 var curMino
+var ghostMino
+var shiftMino
+var shifted
 
 var blocks
 var grid
+
+function shuffle(arr) {
+	var i,j,temp
+	for (i=arr.length-1;i>0;i--) {
+		j = Math.floor(Math.random()*(i+1))
+		temp = arr[i]
+		arr[i] = arr[j]
+		arr[j] = temp
+	}
+	return arr
+}
 
 function idle() {
 }
@@ -123,13 +141,16 @@ function rescale() {
 function setup() {
 	rescale()
 	window.addEventListener('resize',rescale)
-	window.addEventListener('keydown',onKeyDown)
 	$('#canvas').apnd(app.view)
 
 	playfield = []
 	operationQueue = []
-	nextMino = [2,3,1,5,0]
+	minoSeq = [2,3,1,5,0,4,6]
+	nextMino = []
 	curMino = {}
+	ghostMino = {}
+	shiftMino = {}
+	shifted = false
 
 	for(var i=0;i<23;i++) {
 		var arr = []
@@ -161,6 +182,9 @@ function setup() {
 	blocks.y = 480 + 10.5 * 40
 	app.stage.addChild(blocks)
 
+	keySetup()
+
+	for (var i=0;i<5;i++) addNextMino()
 	newMino()
 	stateFunction = run
 	action = fall
@@ -169,63 +193,105 @@ function setup() {
 
 function gameLoop(delta) {
 	frames ++
-	actionTimer -= app.ticker.elapsedMS
-	stateFunction()
+	stateFunction(app.ticker.elapsedMS)
 }
 
-function run() {
+function run(ms) {
+	opTimer.forEach((e,i,a)=>a[i]-=ms)
+	kd.tick()
+
 	if (operationQueue.length > 0) {
 		operationQueue.forEach((e,i,a)=>{
-			console.log(e.code)
-			if (stateFunction === run) {
-				switch (e.keyCode) {
-					// W (87) & Up arrow (38)
-					case 87: rotate(1);break
-					case 38: rotate(1);break
-					// S (83) & Down arrow (40)
-					case 83: softDrop();break
-					case 40: softDrop();break
-					// A (65) & Left arrow (37)
-					case 65: moveLeft();break
-					case 37: moveLeft();break
-					// D (68) & Right arrow (39)
-					case 68: moveRight();break
-					case 39: moveRight();break
-					// Z (90)
-					case 90: rotate(-1);break
-					// space (32)
-					case 32: hardDrop()
-				}
-			}
+			e()
 			setMinoPos(curMino)
+			setGhostPos()
 		})
 		operationQueue = []
 	}
 
-
+	actionTimer -= ms
 	if (actionTimer <= 0) {
 		action()
 		setMinoPos(curMino)
+		setGhostPos()
 		actionTimer = actionTimeout
 	}
 }
 
+function keyTimeout(key,to1,to2,i,f) {
+	kd[key].press(()=>{
+		opTimer[i] = to1
+		operationQueue.push(f)
+	})
+	kd[key].down(()=>{
+		while (opTimer[i]<=0) {
+			opTimer[i] += to2
+			operationQueue.push(f)
+		}
+	})
+}
+
+function keySetup() {
+	kd.UP   .press(()=>{operationQueue.push(()=>{rotate( 1)})})
+	kd.W    .press(()=>{operationQueue.push(()=>{rotate( 1)})})
+	kd.Z    .press(()=>{operationQueue.push(()=>{rotate(-1)})})
+	kd.SPACE.press(()=>{operationQueue.push(()=>{hardDrop()})})
+	kd.SHIFT.press(()=>{operationQueue.push(()=>{shift()})})
+
+	keyTimeout('S'    ,opTimeout1[0],opTimeout2[0],0,()=>{softDrop ()})
+	keyTimeout('DOWN' ,opTimeout1[0],opTimeout2[0],0,()=>{softDrop ()})
+	keyTimeout('A'    ,opTimeout1[1],opTimeout2[1],1,()=>{moveLeft ()})
+	keyTimeout('LEFT' ,opTimeout1[1],opTimeout2[1],1,()=>{moveLeft ()})
+	keyTimeout('D'    ,opTimeout1[2],opTimeout2[2],2,()=>{moveRight()})
+	keyTimeout('RIGHT',opTimeout1[2],opTimeout2[2],2,()=>{moveRight()})
+}
+
 function onKeyDown(key) {
-	operationQueue.push(key)
+	if (stateFunction===run) opHandle(key,1)
+}
+
+function onKeyUp(key) {
+	if (stateFunction===run) opHandle(key,0)
+}
+
+function addNextMino() {
+	var i = nextMino.length
+	nextMino.push({
+		'type':minoSeq[0],
+		'pos' :[13,18-3*i],
+		'rotate':0,
+	})
+	nextMino[i].obj = drawNewMino(nextMino[i])
+	setMinoPos(nextMino[i])
+	minoSeq.splice(0,1)
 }
 
 function newMino() {
-	curMino.type = nextMino[0]
+	curMino = nextMino[0]
 	curMino.pos = [4,19]
 	curMino.rotate = 0
 	if (collision(curMino)) curMino.pos = [4,20]
-	curMino.obj = drawNewMino(curMino)
 	setMinoPos(curMino)
 
 	nextMino.splice(0,1)
-	nextMino.push(randomInt(minoTypes.length))
+	nextMino.forEach((e,i,a)=>{
+		e.pos=[13,18-3*i]
+		setMinoPos(e)
+	})
+	addNextMino()
+	if (minoSeq.length<=0) minoSeq = shuffle([0,1,2,3,4,5,6])
 
 	if (collision(curMino)) lose()
+	else newGhostMino()
+}
+
+function newGhostMino() {
+	ghostMino.type = curMino.type
+	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
+	ghostMino.rotate = curMino.rotate
+	if(ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+	ghostMino.obj = drawGhostMino(curMino)
+	setGhostPos()
 }
 
 function drawNewMino(cur) {
@@ -241,13 +307,38 @@ function drawNewMino(cur) {
 	return obj
 }
 
-function setMinoPos() {
-	var curMinoInfo = minoTypes[curMino.type]
-	curMino.obj.forEach((e,i,a)=>{
-		var blockPos = getBlockPos(curMinoInfo.shape[i],curMino.pos,curMinoInfo.center,curMino.rotate)
+function drawGhostMino(cur) {
+	var curMinoInfo = minoTypes[cur.type]
+	var obj = []
+	curMinoInfo.shape.forEach((e,i,a)=>{
+		var block = new Graphics()
+		block.lineStyle(3,curMinoInfo.color)
+		block.drawRect(3,3,33,33)
+		blocks.addChild(block)
+		obj.push(block)
+	})
+	return obj
+}
+
+function setMinoPos(cur) {
+	var curMinoInfo = minoTypes[cur.type]
+	cur.obj.forEach((e,i,a)=>{
+		var blockPos = getBlockPos(curMinoInfo.shape[i],cur.pos,curMinoInfo.center,cur.rotate)
 		e.x =  blockPos[0] * 40
 		e.y = -blockPos[1] * 40 - 40
 	})
+}
+
+function setGhostPos() {
+	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
+	ghostMino.rotate = curMino.rotate
+	var t = ghostMino.pos[1]
+	while (!collision(ghostMino)) {
+		t = ghostMino.pos[1]
+		ghostMino.pos[1] --
+	}
+	ghostMino.pos[1] = t
+	setMinoPos(ghostMino)
 }
 
 function rotateMatrix(r) {
@@ -272,7 +363,7 @@ function fall() {
 	console.log('fall')
 	var t = curMino.pos[1]
 	curMino.pos[1] --
-	if (collision()) {
+	if (collision(curMino)) {
 		curMino.pos[1] = t
 		lock()
 	}
@@ -317,7 +408,7 @@ function checkFull() {
 }
 
 function lock() {
-	setMinoPos()
+	setMinoPos(curMino)
 	var curMinoInfo = minoTypes[curMino.type]
 	curMinoInfo.shape.forEach((e,i,a)=>{
 		var blockPos = getBlockPos(e,curMino.pos,curMinoInfo.center,curMino.rotate)
@@ -327,20 +418,42 @@ function lock() {
 		playfield[y][x].object = curMino.obj[i]
 	})
 	checkFull()
+	shifted = false
 	newMino()
 	actionTimer = 0
+}
+
+function shift() {
+	if (!shifted) {
+		var tempMino = shiftMino
+		shifted = true
+		shiftMino = curMino
+		shiftMino.pos = [-5,18]
+		setMinoPos(shiftMino)
+		if (tempMino.type == undefined) newMino()
+		else {
+			curMino = tempMino
+			curMino.pos = [4,19]
+			curMino.rotate = 0
+			if (collision(curMino)) curMino.pos = [4,20]
+			setMinoPos(curMino)
+
+			if (collision(curMino)) lose()
+			else newGhostMino()
+		}
+	}
 }
 
 function moveLeft() {
 	var t = curMino.pos[0]
 	curMino.pos[0] --
-	if (collision()) curMino.pos[0] = t
+	if (collision(curMino)) curMino.pos[0] = t
 }
 
 function moveRight() {
 	var t = curMino.pos[0]
 	curMino.pos[0] ++
-	if (collision()) curMino.pos[0] = t
+	if (collision(curMino)) curMino.pos[0] = t
 }
 
 function kick(type,x,ct) {
@@ -348,7 +461,7 @@ function kick(type,x,ct) {
 	var u = curMino.pos
 	for (e of curMinoInfo.kick[x][ct>0?0:1]) {
 		curMino.pos = [u[0]+e[0],u[1]+e[1]]
-		if (!collision()) return true
+		if (!collision(curMino)) return true
 	}
 	curMino.pos = u
 	return false
@@ -358,7 +471,7 @@ function rotate(ct) { // TO FIX
 	var t = curMino.rotate
 	var u = curMino.pos
 	curMino.rotate = (curMino.rotate+4+ct)%4
-	if (collision()) {
+	if (collision(curMino)) {
 		if (!kick(curMino.type,t,ct)) curMino.rotate = t
 	}
 }
@@ -366,12 +479,13 @@ function rotate(ct) { // TO FIX
 function softDrop() {
 	var t = curMino.pos[1]
 	curMino.pos[1] --
-	if (collision()) curMino.pos[1] = t
+	if (collision(curMino)) curMino.pos[1] = t
+	else actionTimer = actionTimeout
 }
 
 function hardDrop() {
 	var t
-	while (!collision()) {
+	while (!collision(curMino)) {
 		t = curMino.pos[1]
 		curMino.pos[1] --
 	}
@@ -379,11 +493,11 @@ function hardDrop() {
 	lock ()
 }
 
-function collision() {
-	var curMinoInfo = minoTypes[curMino.type]
+function collision(cur) {
+	var curMinoInfo = minoTypes[cur.type]
 	var flag = false
 	curMinoInfo.shape.forEach((e,i,a)=>{
-		var blockPos = getBlockPos(e,curMino.pos,curMinoInfo.center,curMino.rotate)
+		var blockPos = getBlockPos(e,cur.pos,curMinoInfo.center,cur.rotate)
 		var x = blockPos[0]
 		var y = blockPos[1]
 		if (x<0||y<0||y>22||x>9) {
@@ -399,6 +513,7 @@ function collision() {
 }
 
 function lose() {
+	if(ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
 	console.log('lose')
 	stateFunction = idle
 }
