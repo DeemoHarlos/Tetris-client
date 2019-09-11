@@ -85,20 +85,15 @@ const minoTypes = [
 	}
 ]
 
-function randomInt(max) {
-	return Math.floor(Math.random() * Math.floor(max));
-}
+var socket
 
-var state           = 'loading'
 var stateFunction   = idle
 var action          = idle
-var actionTimer     = 0
-var actionTimeout   = 1000
 var opTimeout1      = [300,300,300] // down, left, right
 var opTimeout2      = [40,40,40] // down, left, right
 var opTimer         = [0,0,0] // down, left, right
 var frames          = 0
-app = new App({
+var app = new App({
 	width           : 1280,
 	height          : 960,
 	antialias       : false,
@@ -116,20 +111,10 @@ var curMino
 var ghostMino
 var shiftMino
 var shifted
+var updateFlag
 
 var blocks
 var grid
-
-function shuffle(arr) {
-	var i,j,temp
-	for (i=arr.length-1;i>0;i--) {
-		j = Math.floor(Math.random()*(i+1))
-		temp = arr[i]
-		arr[i] = arr[j]
-		arr[j] = temp
-	}
-	return arr
-}
 
 function idle() {
 }
@@ -144,26 +129,31 @@ function setup() {
 	$('#canvas').apnd(app.view)
 
 	playfield = []
-	operationQueue = []
-	minoSeq = [2,3,1,5,0,4,6]
-	nextMino = []
-	curMino = {}
-	ghostMino = {}
-	shiftMino = {}
-	shifted = false
-
 	for(var i=0;i<23;i++) {
 		var arr = []
 		for(var j=0;j<10;j++) {
 			arr.push({
 				'type': -1,
-				'object': null
+				'obj': null
 			})
 		}
 		playfield.push(arr)
 	}
+	nextMino = []
+	for (var i=0;i<5;i++) {
+		nextMino.push({
+			'type':-1,
+			'pos' :[13,18-3*i],
+			'rotate':0,
+		})
+	}
+	curMino = {'type':-1}
+	ghostMino = {'type':-1}
+	shiftMino = {'type':-1}
+	shifted = false
+	updateFlag = false
 
-	// DRAW!
+	// grid
 	grid = new Container()
 	for(var i=0;i<21;i++) for(var j=0;j<10;j++) {
 		var gridBlock = new Graphics()
@@ -184,15 +174,19 @@ function setup() {
 
 	keySetup()
 
-	for (var i=0;i<5;i++) addNextMino()
-	newMino()
-	stateFunction = run
-	action = fall
-	app.ticker.add(gameLoop)
+	// Create WebSocket connection.
+	socket = new WebSocket('ws://127.0.0.1:2407')
+
+	socket.onopen = function() {
+		stateFunction = run
+		app.ticker.add(gameLoop)
+		socket.send(String.fromCharCode(0x01))
+	}
 }
 
 function gameLoop(delta) {
 	frames ++
+	if(socket.readyState === 1) String.fromCharCode(0x00)
 	stateFunction(app.ticker.elapsedMS)
 }
 
@@ -200,59 +194,107 @@ function run(ms) {
 	opTimer.forEach((e,i,a)=>a[i]-=ms)
 	kd.tick()
 
-	if (operationQueue.length > 0) {
-		operationQueue.forEach((e,i,a)=>{
-			e()
-			setMinoPos(curMino)
-			setGhostPos()
-		})
-		operationQueue = []
+	if (updateFlag) {
+		updateFlag = false
+		update()
 	}
 
-	actionTimer -= ms
-	if (actionTimer <= 0) {
-		action()
-		setMinoPos(curMino)
-		setGhostPos()
-		actionTimer = actionTimeout
+}
+
+function update() {
+	// curMino
+	if (curMino.flag) {
+		if(curMino.obj) curMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+		if(curMino.type!=-1) curMino.obj = drawNewMino(curMino)
 	}
+	if(curMino.type!=-1) setMinoPos(curMino)
+
+	// ghostMino
+	if (ghostMino.flag) {
+		if(ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+		if(ghostMino.type!=-1) ghostMino.obj = drawGhostMino(ghostMino)
+	}
+	if(ghostMino.type!=-1) setMinoPos(ghostMino)
+
+	// shiftMino
+	if (shiftMino.flag) {
+		if(shiftMino.obj) shiftMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+		if(shiftMino.type!=-1) shiftMino.obj = drawNewMino(shiftMino)
+	}
+	if(shiftMino.type!=-1) setGhostPos()
+
+	// nextMino
+	nextMino.forEach((e,i,a)=>{
+		if (e.flag) {
+			if(e.obj) shiftMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+			if(e.type!=-1) e.obj = drawNewMino(e)
+		}
+		if(e.type!=-1) setGhostPos()
+	})
+
+	//playfield
+	playfield.forEach((y,yi,pf)=>{
+		y.forEach((x,xi,y)=>{
+			if (x.flag) {
+				blocks.removeChild(x.obj)
+				if (x.type!=-1) {
+					var curMinoInfo = minoTypes[x.type]
+					y[xi].obj = new Graphics()
+					y[xi].obj.beginFill(curMinoInfo.color)
+					y[xi].obj.drawRect(2,2,36,36)
+					blocks.addChild(y[xi].obj)
+				}
+			}
+		})
+	})
+}
+
+function sendAction(act) {
+	var code
+	switch (act) {
+		case 'start'     : code = 0x01;break
+		case 'softDrop'  : code = 0x20;break
+		case 'hardDrop'  : code = 0x21;break
+		case 'moveLeft'  : code = 0x22;break
+		case 'moveRight' : code = 0x23;break
+		case 'rotateCw'  : code = 0x24;break
+		case 'rotateCcw' : code = 0x25;break
+		case 'hold'      : code = 0x31;break
+		default          : code = 0x00
+	}
+	socket.send(String.fromCharCode(code))
 }
 
 function keyTimeout(key,to1,to2,i,f) {
 	kd[key].press(()=>{
 		opTimer[i] = to1
-		operationQueue.push(f)
+		sendAction(f)
 	})
 	kd[key].down(()=>{
 		while (opTimer[i]<=0) {
 			opTimer[i] += to2
-			operationQueue.push(f)
+			sendAction(f)
 		}
 	})
 }
 
 function keySetup() {
-	kd.UP   .press(()=>{operationQueue.push(()=>{rotate( 1)})})
-	kd.W    .press(()=>{operationQueue.push(()=>{rotate( 1)})})
-	kd.Z    .press(()=>{operationQueue.push(()=>{rotate(-1)})})
-	kd.SPACE.press(()=>{operationQueue.push(()=>{hardDrop()})})
-	kd.SHIFT.press(()=>{operationQueue.push(()=>{shift()})})
+	kd.UP   .press(()=>{sendAction('rotateCw')})
+	kd.W    .press(()=>{sendAction('rotateCw')})
+	kd.Z    .press(()=>{sendAction('rotateCcw')})
+	kd.SPACE.press(()=>{sendAction('hardDrop')})
+	kd.SHIFT.press(()=>{sendAction('hold')})
+	kd.C    .press(()=>{sendAction('hold')})
 
-	keyTimeout('S'    ,opTimeout1[0],opTimeout2[0],0,()=>{softDrop ()})
-	keyTimeout('DOWN' ,opTimeout1[0],opTimeout2[0],0,()=>{softDrop ()})
-	keyTimeout('A'    ,opTimeout1[1],opTimeout2[1],1,()=>{moveLeft ()})
-	keyTimeout('LEFT' ,opTimeout1[1],opTimeout2[1],1,()=>{moveLeft ()})
-	keyTimeout('D'    ,opTimeout1[2],opTimeout2[2],2,()=>{moveRight()})
-	keyTimeout('RIGHT',opTimeout1[2],opTimeout2[2],2,()=>{moveRight()})
+	keyTimeout('S'    ,opTimeout1[0],opTimeout2[0],0,'softDrop')
+	keyTimeout('DOWN' ,opTimeout1[0],opTimeout2[0],0,'softDrop')
+	keyTimeout('A'    ,opTimeout1[1],opTimeout2[1],1,'moveLeft')
+	keyTimeout('LEFT' ,opTimeout1[1],opTimeout2[1],1,'moveLeft')
+	keyTimeout('D'    ,opTimeout1[2],opTimeout2[2],2,'moveRight')
+	keyTimeout('RIGHT',opTimeout1[2],opTimeout2[2],2,'moveRight')
 }
 
-function onKeyDown(key) {
-	if (stateFunction===run) opHandle(key,1)
-}
 
-function onKeyUp(key) {
-	if (stateFunction===run) opHandle(key,0)
-}
 
 function addNextMino() {
 	var i = nextMino.length
@@ -285,15 +327,6 @@ function newMino() {
 	else newGhostMino()
 }
 
-function newGhostMino() {
-	ghostMino.type = curMino.type
-	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
-	ghostMino.rotate = curMino.rotate
-	if(ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
-	ghostMino.obj = drawGhostMino(curMino)
-	setGhostPos()
-}
-
 function drawNewMino(cur) {
 	var curMinoInfo = minoTypes[cur.type]
 	var obj = []
@@ -307,19 +340,6 @@ function drawNewMino(cur) {
 	return obj
 }
 
-function drawGhostMino(cur) {
-	var curMinoInfo = minoTypes[cur.type]
-	var obj = []
-	curMinoInfo.shape.forEach((e,i,a)=>{
-		var block = new Graphics()
-		block.lineStyle(3,curMinoInfo.color)
-		block.drawRect(3,3,33,33)
-		blocks.addChild(block)
-		obj.push(block)
-	})
-	return obj
-}
-
 function setMinoPos(cur) {
 	var curMinoInfo = minoTypes[cur.type]
 	cur.obj.forEach((e,i,a)=>{
@@ -327,18 +347,6 @@ function setMinoPos(cur) {
 		e.x =  blockPos[0] * 40
 		e.y = -blockPos[1] * 40 - 40
 	})
-}
-
-function setGhostPos() {
-	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
-	ghostMino.rotate = curMino.rotate
-	var t = ghostMino.pos[1]
-	while (!collision(ghostMino)) {
-		t = ghostMino.pos[1]
-		ghostMino.pos[1] --
-	}
-	ghostMino.pos[1] = t
-	setMinoPos(ghostMino)
 }
 
 function rotateMatrix(r) {
@@ -359,201 +367,122 @@ function getBlockPos(shift,pos,center,rotate) {
 	return [newShift[0]+pos[0]+center[0],newShift[1]+pos[1]+center[1]]
 }
 
-function fall() {
-	console.log('fall')
-	var t = curMino.pos[1]
-	curMino.pos[1] --
-	if (collision(curMino)) {
-		curMino.pos[1] = t
-		lock()
-	}
-}
 
-function checkFull() {
-	var full = []
-	playfield.forEach((e,i,a)=>{
-		var flag = true
-		for (b of e) {
-			if (b.type==-1) {
-				flag = false
-				break
-			}
-		}
-		if (flag) {
-			e.forEach((e,i,a)=>{
-				blocks.removeChild(e.object)
-			})
-			full.splice(0,0,i)
-		}
-	})
-	for (i of full) {
-		playfield.splice(i,1)
-		var arr = []
-		for(var j=0;j<10;j++) {
-			arr.push({
-				'type': -1,
-				'object': null
-			})
-		}
-		playfield.push(arr)
-	}
-	playfield.forEach((e,y,a)=>{
-		e.forEach((e,x,a)=>{
-			if (e.type!=-1) {
-				e.object.x =  x * 40
-				e.object.y = -y * 40 - 40
-			}
-		})
-	})
-}
-
-function lock() {
-	setMinoPos(curMino)
-	var curMinoInfo = minoTypes[curMino.type]
-	curMinoInfo.shape.forEach((e,i,a)=>{
-		var blockPos = getBlockPos(e,curMino.pos,curMinoInfo.center,curMino.rotate)
-		var x = blockPos[0]
-		var y = blockPos[1]
-		playfield[y][x].type = curMino.type
-		playfield[y][x].object = curMino.obj[i]
-	})
-	checkFull()
-	shifted = false
-	newMino()
-	actionTimer = 0
-}
-
-function shift() {
-	if (!shifted) {
-		var tempMino = shiftMino
-		shifted = true
-		shiftMino = curMino
-		shiftMino.pos = [-5,18]
-		setMinoPos(shiftMino)
-		if (tempMino.type == undefined) newMino()
-		else {
-			curMino = tempMino
-			curMino.pos = [4,19]
-			curMino.rotate = 0
-			if (collision(curMino)) curMino.pos = [4,20]
-			setMinoPos(curMino)
-
-			if (collision(curMino)) lose()
-			else newGhostMino()
-		}
-	}
-}
-
-function moveLeft() {
-	var t = curMino.pos[0]
-	curMino.pos[0] --
-	if (collision(curMino)) curMino.pos[0] = t
-}
-
-function moveRight() {
-	var t = curMino.pos[0]
-	curMino.pos[0] ++
-	if (collision(curMino)) curMino.pos[0] = t
-}
-
-function kick(type,x,ct) {
-	var curMinoInfo = minoTypes[type]
-	var u = curMino.pos
-	for (e of curMinoInfo.kick[x][ct>0?0:1]) {
-		curMino.pos = [u[0]+e[0],u[1]+e[1]]
-		if (!collision(curMino)) return true
-	}
-	curMino.pos = u
-	return false
-}
-
-function rotate(ct) { // TO FIX
-	var t = curMino.rotate
-	var u = curMino.pos
-	curMino.rotate = (curMino.rotate+4+ct)%4
-	if (collision(curMino)) {
-		if (!kick(curMino.type,t,ct)) curMino.rotate = t
-	}
-}
-
-function softDrop() {
-	var t = curMino.pos[1]
-	curMino.pos[1] --
-	if (collision(curMino)) curMino.pos[1] = t
-	else actionTimer = actionTimeout
-}
-
-function hardDrop() {
-	var t
-	while (!collision(curMino)) {
-		t = curMino.pos[1]
-		curMino.pos[1] --
-	}
-	curMino.pos[1] = t
-	lock ()
-}
-
-function collision(cur) {
-	var curMinoInfo = minoTypes[cur.type]
-	var flag = false
-	curMinoInfo.shape.forEach((e,i,a)=>{
-		var blockPos = getBlockPos(e,cur.pos,curMinoInfo.center,cur.rotate)
-		var x = blockPos[0]
-		var y = blockPos[1]
-		if (x<0||y<0||y>22||x>9) {
-			flag = true
-			return
-		}
-		if (playfield[y][x].type != -1) {
-			flag = true
-			return
-		}
-	})
-	return flag
-}
-
-function lose() {
+// GhostMino
+function newGhostMino() {
+	ghostMino.type = curMino.type
+	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
+	ghostMino.rotate = curMino.rotate
 	if(ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
-	console.log('lose')
-	stateFunction = idle
+	ghostMino.obj = drawGhostMino(curMino)
+	setGhostPos()
+}
+
+function drawGhostMino(cur) {
+	var curMinoInfo = minoTypes[cur.type]
+	var obj = []
+	curMinoInfo.shape.forEach((e,i,a)=>{
+		var block = new Graphics()
+		block.lineStyle(3,curMinoInfo.color)
+		block.drawRect(3,3,33,33)
+		blocks.addChild(block)
+		obj.push(block)
+	})
+	return obj
+}
+
+function setGhostPos() {
+	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
+	ghostMino.rotate = curMino.rotate
+	var t = ghostMino.pos[1]
+	while (!collision(ghostMino)) {
+		t = ghostMino.pos[1]
+		ghostMino.pos[1] --
+	}
+	ghostMino.pos[1] = t
+	setMinoPos(ghostMino)
 }
 
 setup()
 
 
-/*
-// Create WebSocket connection.
-const socket = new WebSocket('ws://140.112.211.69:2407')
-
-function send(type,data) {
-	socket.send(JSON.stringify({
-		'type': type,
-		'content': data
-	}))
-}
-
-function ping() {
-	var before = Date.now()
-	send('PING',{'date':before})
-}
-//setInterval(ping,1000)
-
 // Connection opened
 socket.addEventListener('open', function (event) {
-	send('MSG','Hello Server!')
-	send('IN','start')
+
 })
 
 // Listen for messages
 socket.addEventListener('message', function (event) {
-	var data = JSON.parse(event.data)
-	if (data.type === 'MSG'){
-		console.log('Server: ', data.content)
+	var buf = new Uint8Array(event.data)
+
+	var index = 0
+	var code = buf[index++]
+	var data = []
+	data.push(buf[index++])
+	data.push(buf[index++])
+	data.push(buf[index++])
+	data.push(buf[index++])
+
+	var curType = buf[index++]
+	if (curMino.type !== curType) {
+		curMino.flag = true
+		curMino.type = curType
 	}
-	else if (data.type === 'PING'){
-		var after = Date.now()
-		var ping = after - data.content.date
-		console.log('Server: ping ' + ping)
+	curMino.pos[0] = buf[index++]
+	curMino.pos[1] = buf[index++]
+	curMino.rotate = buf[index++]
+
+	var shiftType = buf[index++]
+	if (shiftMino.type !== shiftType) {
+		shiftMino.flag = true
+		shiftMino.type = shiftType
 	}
-})
+
+	var ghostType = buf[index++]
+	if (ghostMino.type !== ghostType) {
+		ghostMino.flag = true
+		ghostMino.type = ghostType
+	}
+	ghostMino.pos[0] = buf[index++]
+	ghostMino.pos[1] = buf[index++]
+	ghostMino.rotate = buf[index++]
+
+	playfield.forEach((y,yi,pf)=>{
+		y.forEach((x,xi,y)=>{
+			var type = buf[index++]
+			if (y[xi].type !== type) {
+				y[xi].flag = true
+				y[xi].type = type
+			}
+		})
+	})
+
+	var nl = buf.readInt8(nl,index++)
+	for (var i=0;i<nextMino.length;i++){
+		var type = (i<nl)?buf[index++]:-1
+		if (nextMino[i].type !== type) {
+			nextMino[i].flag = true
+			nextMino[i].type = type
+		}
+	}
+/*
+	switch (code) {
+		case 0x01 : start()     ;break
+	//	case 0x02 : pause()     ;break
+		case 0x08 : lose()      ;break
+		case 0x10 : fall()      ;break
+		case 0x20 : softDrop()  ;break
+		case 0x21 : hardDrop()  ;break
+		case 0x22 : moveLeft()  ;break
+		case 0x23 : moveRight() ;break
+		case 0x24 : rotateCw()  ;break
+		case 0x25 : rotateCcw() ;break
+		case 0x30 : newMino()   ;break
+		case 0x31 : hold()      ;break
+		case 0x32 : lock()      ;break
+		case 0x00 : idle()      ;break
+		default   : idle()
+	}
 */
+	updateFlag = true
+})
