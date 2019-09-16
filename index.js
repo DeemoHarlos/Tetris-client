@@ -149,7 +149,11 @@ function setup() {
 	}
 	curMino = {'type':-1}
 	ghostMino = {'type':-1}
-	shiftMino = {'type':-1}
+	shiftMino = {
+		'type':-1,
+		'pos' :[-4,18],
+		'rotate':0,
+	}
 	shifted = false
 	updateFlag = false
 
@@ -204,45 +208,47 @@ function run(ms) {
 function update() {
 	// curMino
 	if (curMino.flag) {
-		if(curMino.obj) curMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
-		if(curMino.type!=-1) curMino.obj = drawNewMino(curMino)
+		if (curMino.obj) curMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+		if (curMino.type!=-1) curMino.obj = drawNewMino(curMino)
 	}
-	if(curMino.type!=-1) setMinoPos(curMino)
+	if (curMino.type!=-1) setMinoPos(curMino)
 
 	// ghostMino
 	if (ghostMino.flag) {
-		if(ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
-		if(ghostMino.type!=-1) ghostMino.obj = drawGhostMino(ghostMino)
+		if (ghostMino.obj) ghostMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+		if (ghostMino.type!=-1) ghostMino.obj = drawGhostMino(ghostMino)
 	}
-	if(ghostMino.type!=-1) setMinoPos(ghostMino)
+	if (ghostMino.type!=-1) setMinoPos(ghostMino)
 
 	// shiftMino
 	if (shiftMino.flag) {
-		if(shiftMino.obj) shiftMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
-		if(shiftMino.type!=-1) shiftMino.obj = drawNewMino(shiftMino)
+		if (shiftMino.obj) shiftMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+		if (shiftMino.type!=-1) shiftMino.obj = drawNewMino(shiftMino)
 	}
-	if(shiftMino.type!=-1) setGhostPos()
+	if (shiftMino.type!=-1) setMinoPos(shiftMino)
 
 	// nextMino
 	nextMino.forEach((e,i,a)=>{
 		if (e.flag) {
-			if(e.obj) shiftMino.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
-			if(e.type!=-1) e.obj = drawNewMino(e)
+			if (e.obj) e.obj.forEach((e,i,a)=>{blocks.removeChild(e)})
+			if (e.type!=-1) e.obj = drawNewMino(e)
 		}
-		if(e.type!=-1) setGhostPos()
+		if (e.type!=-1) setMinoPos(e)
 	})
 
 	//playfield
 	playfield.forEach((y,yi,pf)=>{
 		y.forEach((x,xi,y)=>{
 			if (x.flag) {
-				blocks.removeChild(x.obj)
+				if (x.obj) blocks.removeChild(x.obj)
 				if (x.type!=-1) {
 					var curMinoInfo = minoTypes[x.type]
 					y[xi].obj = new Graphics()
 					y[xi].obj.beginFill(curMinoInfo.color)
 					y[xi].obj.drawRect(2,2,36,36)
 					blocks.addChild(y[xi].obj)
+					y[xi].obj.x =  xi * 40
+					y[xi].obj.y = -yi * 40 - 40
 				}
 			}
 		})
@@ -294,40 +300,8 @@ function keySetup() {
 	keyTimeout('RIGHT',opTimeout1[2],opTimeout2[2],2,'moveRight')
 }
 
-
-
-function addNextMino() {
-	var i = nextMino.length
-	nextMino.push({
-		'type':minoSeq[0],
-		'pos' :[13,18-3*i],
-		'rotate':0,
-	})
-	nextMino[i].obj = drawNewMino(nextMino[i])
-	setMinoPos(nextMino[i])
-	minoSeq.splice(0,1)
-}
-
-function newMino() {
-	curMino = nextMino[0]
-	curMino.pos = [4,19]
-	curMino.rotate = 0
-	if (collision(curMino)) curMino.pos = [4,20]
-	setMinoPos(curMino)
-
-	nextMino.splice(0,1)
-	nextMino.forEach((e,i,a)=>{
-		e.pos=[13,18-3*i]
-		setMinoPos(e)
-	})
-	addNextMino()
-	if (minoSeq.length<=0) minoSeq = shuffle([0,1,2,3,4,5,6])
-
-	if (collision(curMino)) lose()
-	else newGhostMino()
-}
-
 function drawNewMino(cur) {
+	if (cur.type < 0) return
 	var curMinoInfo = minoTypes[cur.type]
 	var obj = []
 	curMinoInfo.shape.forEach((e,i,a)=>{
@@ -341,6 +315,7 @@ function drawNewMino(cur) {
 }
 
 function setMinoPos(cur) {
+	if (cur.type < 0) return
 	var curMinoInfo = minoTypes[cur.type]
 	cur.obj.forEach((e,i,a)=>{
 		var blockPos = getBlockPos(curMinoInfo.shape[i],cur.pos,curMinoInfo.center,cur.rotate)
@@ -370,6 +345,7 @@ function getBlockPos(shift,pos,center,rotate) {
 
 // GhostMino
 function newGhostMino() {
+	if (ghostMino.type < 0) return
 	ghostMino.type = curMino.type
 	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
 	ghostMino.rotate = curMino.rotate
@@ -379,6 +355,7 @@ function newGhostMino() {
 }
 
 function drawGhostMino(cur) {
+	if (cur.type < 0) return
 	var curMinoInfo = minoTypes[cur.type]
 	var obj = []
 	curMinoInfo.shape.forEach((e,i,a)=>{
@@ -392,14 +369,6 @@ function drawGhostMino(cur) {
 }
 
 function setGhostPos() {
-	ghostMino.pos = [curMino.pos[0],curMino.pos[1]]
-	ghostMino.rotate = curMino.rotate
-	var t = ghostMino.pos[1]
-	while (!collision(ghostMino)) {
-		t = ghostMino.pos[1]
-		ghostMino.pos[1] --
-	}
-	ghostMino.pos[1] = t
 	setMinoPos(ghostMino)
 }
 
@@ -413,8 +382,9 @@ socket.addEventListener('open', function (event) {
 
 // Listen for messages
 socket.addEventListener('message', function (event) {
-	var buf = new Uint8Array(event.data)
+	event.data.arrayBuffer().then(data=>{
 
+	var buf = new Int8Array(data)
 	var index = 0
 	var code = buf[index++]
 	var data = []
@@ -428,6 +398,7 @@ socket.addEventListener('message', function (event) {
 		curMino.flag = true
 		curMino.type = curType
 	}
+	if (!curMino.pos) curMino.pos = [0,0]
 	curMino.pos[0] = buf[index++]
 	curMino.pos[1] = buf[index++]
 	curMino.rotate = buf[index++]
@@ -443,6 +414,7 @@ socket.addEventListener('message', function (event) {
 		ghostMino.flag = true
 		ghostMino.type = ghostType
 	}
+	if (!ghostMino.pos) ghostMino.pos = [0,0]
 	ghostMino.pos[0] = buf[index++]
 	ghostMino.pos[1] = buf[index++]
 	ghostMino.rotate = buf[index++]
@@ -457,7 +429,7 @@ socket.addEventListener('message', function (event) {
 		})
 	})
 
-	var nl = buf.readInt8(nl,index++)
+	var nl = buf[index++]
 	for (var i=0;i<nextMino.length;i++){
 		var type = (i<nl)?buf[index++]:-1
 		if (nextMino[i].type !== type) {
@@ -485,4 +457,5 @@ socket.addEventListener('message', function (event) {
 	}
 */
 	updateFlag = true
+	})
 })
